@@ -91,8 +91,8 @@ class C {
   m() {}
 }
 
-METADATA.get(C[Symbol.metadata]); // 'a'
-METADATA.get(C.m[Symbol.metadata]); // 'b'
+METADATA.get(C[Symbol.metadataKey]); // 'a'
+METADATA.get(C.m[Symbol.metadataKey]); // 'b'
 ```
 
 This allows metadata to be associated directly with the decorated value.
