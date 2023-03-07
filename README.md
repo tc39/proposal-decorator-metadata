@@ -31,19 +31,16 @@ recent version, however, as decorators only have access to the value they are
 _directly_ decorating (e.g. method decorators have access to the method, field
 decorators have access to the field, etc).
 
-This proposal extends decorators by providing a value to use as a key to
-associate metadata with. This key is then accessible via the
-`Symbol.metadataKey` property on the class definition.
+This proposal extends decorators by providing a metadata _object_, which can be
+used either to directly store metadata, or as a WeakMap key. This object is
+provided via the decorator's context argument, and is then accessible via the
+`Symbol.metadata` property on the class definition after decoration.
 
 ## Detailed Design
 
 The overall decorator signature will be updated to the following:
 
 ```ts
-interface MetadataKey {
-  parent: MetadataKey | null;
-}
-
 type Decorator = (value: Input, context: {
   kind: string;
   name: string | symbol;
@@ -54,134 +51,116 @@ type Decorator = (value: Input, context: {
   isPrivate?: boolean;
   isStatic?: boolean;
   addInitializer?(initializer: () => void): void;
-+ metadataKey?: MetadataKey;
-+ class?: {
-+   metadataKey: MetadataKey;
-+   name: string;
-+ }
++ metadata?: Record<string | number | symbol, unknown>;
 }) => Output | void;
 ```
 
-Two new values are introduced, `metadataKey` and `class`.
+The new `metadata` property is a plain JavaScript object. The same object is
+passed to every decorator applied to a class or any of its elements. After the
+class has been fully defined, it is assigned to the `Symbol.metadata` property
+of the class.
 
-### `metadataKey`
-
-`metadataKey` is present for any _tangible_ decoratable value, specifically:
-
-- Classes
-- Class methods
-- Class accessors and auto-accessors
-
-It is not present for class fields because they have no tangible value (e.g.
-there is nothing to associate the metadata with, directly or indirectly).
-`metadataKey` is then set on the decorated value once decoration has completed:
+An example usage might look like:
 
 ```js
-const METADATA = new WeakMap();
-
-function meta(value) {
+function meta(key, value) {
   return (_, context) => {
-    METADATA.set(context.metadataKey, value);
+    context.metadata[key] = value;
   };
 }
 
-@meta('a')
+@meta('a' 'x')
 class C {
-  @meta('b')
+  @meta('b', 'y')
   m() {}
 }
 
-METADATA.get(C[Symbol.metadata]); // 'a'
-METADATA.get(C.m[Symbol.metadata]); // 'b'
+C[Symbol.metadata].a; // 'x'
+C[Symbol.metadata].b; // 'y'
 ```
 
-This allows metadata to be associated directly with the decorated value.
+### Inheritance
 
-### `class`
-
-The `class` object is available for all _class element_ decorators, including
-fields. The `class` object contains two values:
-
-1. The `metadataKey` for the class itself
-2. The name of the class
-
-This allows decorators for class elements to associate metadata with the class.
-For method decorators, this can simplify certain flows. For class fields, since
-they have no tangible value to associate metadata with, the class metadata key
-is the only way to store their metadata.
+If the decorated class has a parent class, then the prototype of the `metadata`
+object is set to the metadata object of the superclass. This allows metadata to
+be inherited in a natural way, taking advantage of shadowing by default,
+mirroring class inheritance. For example:
 
 ```js
-const METADATA = new WeakMap();
-const CLASS = Symbol();
-
-function meta(value) {
+function meta(key, value) {
   return (_, context) => {
-    const metadataKey = context.class?.metadataKey ?? context.metadataKey;
-    const metadataName = context.kind === 'class' ? CLASS : context.name;
-
-    let meta = METADATA.get(metadataKey);
-
-    if (meta === undefined) {
-      meta = new Map();
-      METADATA.set(metadataKey, meta);
-    }
-
-    meta.set(metadataName, value);
+    context.metadata[key] = value;
   };
 }
 
-@meta('a')
+@meta('a' 'x')
 class C {
-  @meta('b')
-  foo;
-
-  @meta('c')
-  get bar() {}
-
-  @meta('d')
-  baz() {}
+  @meta('b', 'y')
+  m() {}
 }
 
-// Accessing the metadata
-const meta = METADATA.get(C[Symbol.metadataKey]);
-
-meta.get(CLASS); // 'a';
-meta.get('foo'); // 'b';
-meta.get('bar'); // 'c';
-meta.get('baz'); // 'd';
-```
-
-### `parent`
-
-Metadata keys also have a `parent` property. This is set to the value of
-`Symbol.metadataKey` on the prototype of the value being decorated.
-
-```js
-const METADATA = new WeakMap();
-
-function meta(value) {
-  return (_, context) => {
-    const classMetaKey = context.class.metadataKey;
-    const existingValue = METADATA.get(classMetaKey.parent) ?? 0;
-
-    METADATA.set(classMetaKey, existingValue + value);
-  };
-}
-
-class C {
-  @meta(1)
-  foo;
-}
+C[Symbol.metadata].a; // 'x'
+C[Symbol.metadata].b; // 'y'
 
 class D extends C {
-  @meta(2)
-  foo;
+  @meta('b', 'z')
+  m() {}
 }
 
-// Accessing the metadata
-METADATA.get(C[Symbol.metadataKey]); // 3
+D[Symbol.metadata].a; // 'x'
+D[Symbol.metadata].b; // 'z'
 ```
 
-## Examples
+In addition, metadata from the parent can be read during decoration, so it can
+be modified or extended by children rather than overriding it.
 
-Todo
+```ts
+function appendMeta(key, value) {
+  return (_, context) => {
+    // NOTE: be sure to copy, not mutate
+    const existing = context.metadata[key] ?? [];
+    context.metadata[key] = [...existing, value];
+  };
+}
+
+@appendMeta('a', 'x')
+class C {}
+
+@appendMeta('a', 'z')
+class D extends C {}
+
+C[Symbol.metadata].a; // ['x']
+D[Symbol.metadata].a; // ['x', 'z']
+```
+
+### Private Metadata
+
+In addition to public metadata placed directly on the metadata object, the
+object can be used as a key in a `WeakMap` if the decorator author does not want
+to share their metadata.
+
+```ts
+const PRIVATE_METADATA = new WeakMap();
+
+function meta(key, value) {
+  return (_, context) => {
+    let metadata = PRIVATE_METADATA.get(context.metadata);
+
+    if (!metadata) {
+      metadata = {};
+      PRIVATE_METADATA.set(context.metadata, metadata);
+    }
+
+    metadata[key] = value;
+  };
+}
+
+@meta('a' 'x')
+class C {
+  @meta('b', 'y')
+  m() {}
+}
+
+PRIVATE_METADATA.get(C[Symbol.metadata]).a; // 'x'
+PRIVATE_METADATA.get(C[Symbol.metadata]).b; // 'y'
+```
