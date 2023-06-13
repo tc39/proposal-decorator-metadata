@@ -2,7 +2,7 @@
 
 # Decorator Metadata
 
-**Stage**: 2
+**Stage**: 3
 
 **Spec Text**: https://github.com/pzuraq/ecma262/pull/10
 
