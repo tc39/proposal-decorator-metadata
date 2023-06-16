@@ -71,7 +71,7 @@ function meta(key, value) {
   };
 }
 
-@meta('a' 'x')
+@meta('a', 'x')
 class C {
   @meta('b', 'y')
   m() {}
@@ -95,7 +95,7 @@ function meta(key, value) {
   };
 }
 
-@meta('a' 'x')
+@meta('a', 'x')
 class C {
   @meta('b', 'y')
   m() {}
@@ -157,7 +157,7 @@ function meta(key, value) {
   };
 }
 
-@meta('a' 'x')
+@meta('a', 'x')
 class C {
   @meta('b', 'y')
   m() {}
